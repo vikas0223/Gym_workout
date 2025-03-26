@@ -10,7 +10,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   UserIcon as Male,
   UserIcon as Female,
@@ -30,6 +29,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Badge } from "@/components/ui/badge"
+import MuscleGroupDropdown from "@/components/muscle-group-dropdown"
+import EquipmentSelectionGrid from "@/components/equipment-selection-grid"
+import SuccessToast from "@/components/success-toast"
 
 export default function WorkoutPlanner() {
   const [formData, setFormData] = useState({
@@ -53,6 +55,7 @@ export default function WorkoutPlanner() {
   const [savedPlans, setSavedPlans] = useState([])
   const [selectedExercise, setSelectedExercise] = useState(null)
   const [showSavedPlans, setShowSavedPlans] = useState(false)
+  const [showSuccessToast, setShowSuccessToast] = useState(false)
 
   // Load saved plans from localStorage on component mount
   useEffect(() => {
@@ -154,13 +157,32 @@ export default function WorkoutPlanner() {
     setStep(1)
   }
 
+  // Fix the "All" option in muscle group selection
+  // Replace the handleMuscleGroupSelect function with this improved version
   const handleMuscleGroupSelect = (group) => {
-    if (formData.muscleGroups.includes(group)) {
+    if (group === "All") {
+      // If All is selected, include all muscle groups
       setFormData({
         ...formData,
-        muscleGroups: formData.muscleGroups.filter((g) => g !== group),
+        muscleGroups: [
+          "Upper Body Push",
+          "Upper Body Pull",
+          "Lower Body Push",
+          "Lower Body Pull",
+          "Core",
+          "Arms",
+          "Shoulders",
+        ],
+      })
+    } else if (formData.muscleGroups.includes(group)) {
+      // If the group is already selected, remove it
+      const newMuscleGroups = formData.muscleGroups.filter((g) => g !== group)
+      setFormData({
+        ...formData,
+        muscleGroups: newMuscleGroups,
       })
     } else {
+      // Add the group to the selection
       setFormData({
         ...formData,
         muscleGroups: [...formData.muscleGroups, group],
@@ -253,6 +275,7 @@ export default function WorkoutPlanner() {
       setWorkoutPlan(exercises)
       setIsGenerating(false)
       setStep(5)
+      setShowSuccessToast(true)
 
       // Scroll to top when showing results
       window.scrollTo({ top: 0, behavior: "smooth" })
@@ -319,10 +342,11 @@ export default function WorkoutPlanner() {
     setSelectedExercise(exercise)
   }
 
+  // Update the generateExercises function to consider gender
   const generateExercises = (data) => {
     // Get exercises from our expanded database
     let exercises = []
-    const { goal, type, equipment, muscleGroups } = data
+    const { goal, type, equipment, muscleGroups, gender } = data
 
     // Get exercises from the database based on goal and type
     if (exerciseDatabase[goal] && exerciseDatabase[goal][type]) {
@@ -341,7 +365,7 @@ export default function WorkoutPlanner() {
     }
 
     // Filter exercises based on selected muscle groups
-    if (muscleGroups.length > 0 && !muscleGroups.includes("all")) {
+    if (muscleGroups.length > 0) {
       exercises = exercises.filter((ex) => {
         if (ex.muscleGroup) {
           return muscleGroups.includes(ex.muscleGroup)
@@ -349,6 +373,90 @@ export default function WorkoutPlanner() {
         return true
       })
     }
+
+    // Apply gender-specific adjustments
+    if (gender === "female") {
+      // For female users, prioritize exercises that focus on common female fitness goals
+      // Such as lower body, core strength, and endurance
+      exercises = exercises.map((ex) => {
+        const newEx = { ...ex }
+
+        // Increase priority for lower body and core exercises
+        if (
+          newEx.muscleGroup === "Lower Body Push" ||
+          newEx.muscleGroup === "Lower Body Pull" ||
+          newEx.muscleGroup === "Core"
+        ) {
+          newEx.priority = (newEx.priority || 1) + 1
+        }
+
+        // Adjust rep ranges for female physiology (slightly higher reps)
+        if (newEx.reps && newEx.reps.includes("-")) {
+          const [min, max] = newEx.reps.split("-").map(Number)
+          newEx.reps = `${min + 2}-${max + 2}`
+        }
+
+        return newEx
+      })
+
+      // Sort by priority
+      exercises.sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    } else if (gender === "male") {
+      // For male users, prioritize exercises that focus on common male fitness goals
+      // Such as upper body strength and muscle mass
+      exercises = exercises.map((ex) => {
+        const newEx = { ...ex }
+
+        // Increase priority for upper body exercises
+        if (
+          newEx.muscleGroup === "Upper Body Push" ||
+          newEx.muscleGroup === "Upper Body Pull" ||
+          newEx.muscleGroup === "Arms"
+        ) {
+          newEx.priority = (newEx.priority || 1) + 1
+        }
+
+        // Adjust weight recommendations for male physiology
+        if (newEx.weightNote) {
+          newEx.weightNote += " Consider starting with a challenging weight that allows proper form."
+        }
+
+        return newEx
+      })
+
+      // Sort by priority
+      exercises.sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    }
+
+    // Add some randomness to exercise selection to ensure variety
+    // Especially important for regenerated plans
+    const shuffleArray = (array) => {
+      const newArray = [...array]
+      for (let i = newArray.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[newArray[i], newArray[j]] = [newArray[j], newArray[i]]
+      }
+      return newArray
+    }
+
+    // Shuffle within each muscle group to maintain balance but add variety
+    const groupedExercises = {}
+    exercises.forEach((ex) => {
+      if (!groupedExercises[ex.muscleGroup]) {
+        groupedExercises[ex.muscleGroup] = []
+      }
+      groupedExercises[ex.muscleGroup].push(ex)
+    })
+
+    Object.keys(groupedExercises).forEach((group) => {
+      groupedExercises[group] = shuffleArray(groupedExercises[group])
+    })
+
+    // Rebuild the exercises array with shuffled groups
+    exercises = []
+    Object.values(groupedExercises).forEach((group) => {
+      exercises = [...exercises, ...group]
+    })
 
     // Adjust based on difficulty
     if (data.difficulty === "beginner") {
@@ -436,10 +544,14 @@ export default function WorkoutPlanner() {
     }
   }
 
+  // Replace the regenerateBasedOnFeedback function with this improved version
   const regenerateBasedOnFeedback = (data, feedback) => {
     // Analyze feedback and adjust the plan
     const lowerFeedback = feedback.toLowerCase()
     const newData = { ...data }
+
+    // Add some randomness to ensure a different plan
+    newData.timestamp = Date.now() // Add a timestamp to ensure different randomization
 
     if (lowerFeedback.includes("too hard") || lowerFeedback.includes("difficult")) {
       newData.difficulty = "beginner"
@@ -489,6 +601,13 @@ export default function WorkoutPlanner() {
 
   return (
     <div className="max-w-3xl mx-auto">
+      {/* Success Toast */}
+      <SuccessToast
+        message="Your workout plan is ready!"
+        visible={showSuccessToast}
+        onClose={() => setShowSuccessToast(false)}
+      />
+
       {/* Loading Overlay */}
       {isGenerating && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50">
@@ -752,50 +871,21 @@ export default function WorkoutPlanner() {
               {errors.equipment && <p className="text-red-500 text-sm mt-2">{errors.equipment}</p>}
             </CardHeader>
             <CardContent>
-              <div className="mb-4">
-                <motion.div
-                  whileHover={{ scale: 1.02 }}
-                  className={`p-4 rounded-lg cursor-pointer flex items-center gap-2 ${
-                    formData.equipment.length === equipmentOptions.length
-                      ? "bg-indigo-200 border border-indigo-400"
-                      : "bg-white/50 border border-indigo-200"
-                  }`}
-                  onClick={() => handleAllEquipment(formData.equipment.length !== equipmentOptions.length)}
-                >
-                  <Checkbox
-                    checked={formData.equipment.length === equipmentOptions.length}
-                    className="data-[state=checked]:bg-indigo-500 data-[state=checked]:text-white"
-                  />
-                  <Label className="cursor-pointer text-indigo-900 font-medium">Select All Equipment</Label>
-                </motion.div>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {equipmentOptions.map((equipment) => (
-                  <motion.div
-                    key={equipment}
-                    whileHover={{ scale: 1.03 }}
-                    className={`p-4 rounded-lg cursor-pointer flex items-center gap-2 ${
-                      formData.equipment.includes(equipment.toLowerCase())
-                        ? "bg-indigo-200 border border-indigo-400"
-                        : "bg-white/50 border border-indigo-200"
-                    }`}
-                    onClick={() =>
-                      handleCheckboxChange(
-                        "equipment",
-                        equipment.toLowerCase(),
-                        !formData.equipment.includes(equipment.toLowerCase()),
-                      )
-                    }
-                  >
-                    <Checkbox
-                      checked={formData.equipment.includes(equipment.toLowerCase())}
-                      className="data-[state=checked]:bg-indigo-500 data-[state=checked]:text-white"
-                    />
-                    <Label className="cursor-pointer text-indigo-900">{equipment}</Label>
-                  </motion.div>
-                ))}
-              </div>
+              <EquipmentSelectionGrid
+                selectedEquipment={formData.equipment}
+                onChange={(equipment) => {
+                  setFormData({
+                    ...formData,
+                    equipment,
+                  })
+                  if (errors.equipment) {
+                    setErrors({
+                      ...errors,
+                      equipment: null,
+                    })
+                  }
+                }}
+              />
             </CardContent>
             <CardFooter className="flex justify-between">
               <Button onClick={prevStep} variant="outline" className="border-indigo-300 text-indigo-700">
@@ -818,18 +908,37 @@ export default function WorkoutPlanner() {
           <Card className={cardStyle}>
             <CardHeader>
               <CardTitle className="text-indigo-900">
-                Muscle Group Selection <span className="text-red-500">*</span>
+                What do you want to train? <span className="text-red-500">*</span>
               </CardTitle>
               <CardDescription className="text-indigo-700">
                 Select the muscle groups you want to focus on
               </CardDescription>
               {errors.muscleGroups && <p className="text-red-500 text-sm mt-2">{errors.muscleGroups}</p>}
             </CardHeader>
-            <CardContent>
-              <div className="bg-white/70 rounded-lg p-4 mb-6">
-                <h3 className="text-center text-indigo-900 font-medium mb-4">Select muscles on the diagram</h3>
-                <div className="flex justify-center mb-4">
-                  <div className="relative w-full max-w-md bg-white rounded-lg border border-indigo-100 p-4">
+            <CardContent className="space-y-6">
+              <div className="space-y-4">
+                <Label className="text-indigo-900 font-medium">Muscle Groups</Label>
+                <MuscleGroupDropdown
+                  selectedGroups={formData.muscleGroups}
+                  onChange={(groups) => {
+                    setFormData({
+                      ...formData,
+                      muscleGroups: groups,
+                    })
+                    if (errors.muscleGroups) {
+                      setErrors({
+                        ...errors,
+                        muscleGroups: null,
+                      })
+                    }
+                  }}
+                />
+              </div>
+
+              <div className="bg-white/70 rounded-lg p-4">
+                <h3 className="text-center text-indigo-900 font-medium mb-4">Or select muscles on the diagram</h3>
+                <div className="flex justify-center">
+                  <div className="relative w-full max-w-md">
                     {/* Realistic Human Body SVG */}
                     <svg viewBox="0 0 400 600" className="w-full h-auto">
                       {/* Base body outline */}
@@ -964,65 +1073,6 @@ export default function WorkoutPlanner() {
                         onClick={() => handleMuscleGroupSelect("Lower Body Pull")}
                       />
                     </svg>
-
-                    {/* Legend */}
-                    <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-                      <div className="flex items-center">
-                        <div className="w-3 h-3 bg-indigo-400 mr-2 rounded-sm"></div>
-                        <span className="text-indigo-900">Selected</span>
-                      </div>
-                      <div className="flex items-center">
-                        <div className="w-3 h-3 bg-slate-200 mr-2 rounded-sm"></div>
-                        <span className="text-indigo-900">Not Selected</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {[
-                      "Upper Body Push",
-                      "Upper Body Pull",
-                      "Lower Body Push",
-                      "Lower Body Pull",
-                      "Core",
-                      "Arms",
-                      "Shoulders",
-                      "All",
-                    ].map((group) => (
-                      <motion.div
-                        key={group}
-                        whileHover={{ scale: 1.02 }}
-                        className={`p-3 rounded-lg cursor-pointer flex items-center gap-2 ${
-                          formData.muscleGroups.includes(group)
-                            ? "bg-indigo-200 border border-indigo-400"
-                            : "bg-white/50 border border-indigo-200"
-                        }`}
-                        onClick={() => {
-                          if (group === "All") {
-                            setFormData({
-                              ...formData,
-                              muscleGroups: ["all"],
-                            })
-                          } else {
-                            handleMuscleGroupSelect(group)
-                          }
-                        }}
-                      >
-                        <Checkbox
-                          checked={
-                            group === "All"
-                              ? formData.muscleGroups.includes("all")
-                              : formData.muscleGroups.includes(group)
-                          }
-                          className="data-[state=checked]:bg-indigo-500 data-[state=checked]:text-white"
-                        />
-                        <Label className="cursor-pointer text-indigo-900">{group}</Label>
-                      </motion.div>
-                    ))}
                   </div>
                 </div>
               </div>
